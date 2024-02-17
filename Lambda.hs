@@ -17,32 +17,33 @@ instance Show Expr where
 var :: Parser Expr
 var = Term <$> (some $ sat (\x -> isAlpha x && isLower x))
 
-term :: NudParser Expr 
-term p = var
-
-strip :: Parser String 
-strip = pass
+nud :: NudParser Expr 
+nud pex = var <|> wrap "(" (pex (RAssoc 0)) ")"
 
 oper :: Parser String 
 oper = (consumed whtspc >> pure "Appl") <|> (char 'L' >> pure "Abst")
 
 ops = [Infix "Appl" (LAssoc 10) bindAppl]
-
-pre = [Prefix "Abst" bindAbst]
+pre = [Prefix "Abst" (RAssoc 20) bindAbst]
 
 bindAppl :: LedParser Expr
 bindAppl (Infix _ precedence _) lhs pex = do 
     rhs <- pex precedence
     pure $ Appl lhs rhs
 
--- TODO: create prefixBinder that takes pex as arg
-bindAbst :: String -> Expr -> Parser Expr 
-bindAbst _ rhs = do 
+bindAbst :: PrefixParser Expr 
+bindAbst (Prefix _ precedence _) pex = do
+    whtspc
+    bind <- pex precedence
+    whtspc
     char '.'
-    rest <- lambda
-    pure $ Abst rhs rest
+    whtspc
+    body <- pex (RAssoc 0)
+    pure $ Abst bind body 
 
-    
-lambda = buildParser ops pre term oper strip
+lambda = buildParser ops pre nud oper pass
 
--- \\ X . A B C --> Space is an operator
+term :: String -> Expr 
+term inp = case run (lambda <* eof) inp of 
+    Left _ -> error $ "invalid lmabda term "++inp
+    Right (l, _) -> l

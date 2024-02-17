@@ -7,14 +7,14 @@ import Parser
 
 data Precedence = LAssoc Int | RAssoc Int
 
-data Infix e  = Infix String Precedence (LedParser e)
-data Prefix e = Prefix String (String -> e -> Parser e)
+data Infix e  = Infix  String Precedence (LedParser e)
+data Prefix e = Prefix String Precedence (PrefixParser e)
 
 type OperatorMap o = Map.Map String o
 type PrecedenceParser e = Precedence -> Parser e
 type NudParser e = PrecedenceParser e -> Parser e
-type LedParser e = Infix e -> e -> PrecedenceParser e -> Parser e
-type PrefixParser e = String -> PrecedenceParser e -> Parser e
+type LedParser e = Infix e -> e -> NudParser e
+type PrefixParser e = Prefix e -> NudParser e
 
 buildParser ::
   forall e .
@@ -32,7 +32,7 @@ buildParser infixes prefixes nud oper strip = parseExpr (RAssoc 0)
     infixMap = intoMap infixes (\op@(Infix key _ _) -> (key, op))
     
     prefixMap :: OperatorMap (Prefix e)
-    prefixMap = intoMap prefixes (\op@(Prefix key _) -> (key, op))
+    prefixMap = intoMap prefixes (\op@(Prefix key _ _) -> (key, op))
 
     intoMap :: [a] -> (a -> (String, a)) -> OperatorMap a 
     intoMap ops f = Map.fromList (map f ops)
@@ -52,7 +52,7 @@ buildParser infixes prefixes nud oper strip = parseExpr (RAssoc 0)
     parsePrefix = do
       key <- oper
       case Map.lookup key prefixMap of
-        Just (Prefix _ bind) -> nud parseExpr >>= bind key
+        Just op@(Prefix _ _ bind) -> bind op parseExpr 
         Nothing -> empty
 
     parseInfix :: Int -> e -> Parser e
