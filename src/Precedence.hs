@@ -12,7 +12,6 @@ data Precedence = LAssoc Int | RAssoc Int
 data Infix e  = Infix  String Precedence (LedParser e)
 data Prefix e = Prefix String Precedence (PrefixParser e)
 
-type OperatorMap o = Map.Map String o
 type PrecedenceParser e = Precedence -> Parser e
 type NudParser e = PrecedenceParser e -> Parser e
 type LedParser e = Infix e -> e -> NudParser e
@@ -30,13 +29,13 @@ buildParser ::
 buildParser infixes prefixes nud oper strip = parseExpr (RAssoc 0)
   where
 
-    infixMap :: OperatorMap (Infix e)
+    infixMap :: Map.Map String (Infix e)
     infixMap = intoMap infixes (\op@(Infix key _ _) -> (key, op))
     
-    prefixMap :: OperatorMap (Prefix e)
+    prefixMap :: Map.Map String (Prefix e)
     prefixMap = intoMap prefixes (\op@(Prefix key _ _) -> (key, op))
 
-    intoMap :: [a] -> (a -> (String, a)) -> OperatorMap a 
+    intoMap :: [a] -> (a -> (String, a)) -> Map.Map String a 
     intoMap ops f = Map.fromList (map f ops)
 
     parseExpr :: Precedence -> Parser e

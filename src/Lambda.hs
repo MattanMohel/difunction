@@ -7,24 +7,44 @@ import Data.Char
 data Expr 
     = Appl Expr Expr 
     | Abst Expr Expr
+    | Type Expr Expr
+    | Arrow Expr Expr 
     | Term String 
 
 instance Show Expr where 
-    show (Appl a b) = "("++show a++" "++show b++")"
-    show (Abst a b) = "(L"++show a++"."++show b++")"
+    show (Appl a b)  = "("++show a++" "++show b++")"
+    show (Abst a b)  = "(λ"++show a++"."++show b++")"
+    show (Type a b)  = "["++show a++": "++show b++"]"
+    show (Arrow a b) = "("++show a++" -> "++show b++")"
     show (Term a) = a
 
 var :: Parser Expr
-var = Term <$> (some $ sat (\x -> isAlpha x && isLower x))
+var = Term <$> (some alpha)
 
 nud :: NudParser Expr 
 nud pex = var <|> wrap "(" (pex (RAssoc 0)) ")"
 
 oper :: Parser String 
-oper = (consumed whtspc >> pure "Appl") <|> (char 'L' >> pure "Abst")
+oper = 
+    (whtspc >> (
+        ((char '\\' <|> char 'λ') >> pure "Abst")    <|>
+        (char ':'    >> pure "Bind")    <|>
+        (string "->" >> pure "Arrow"))) <|> 
+        ((consumed whtspc) <|> (lift $ list $ sat (/=')')) >> pure "Appl")
 
-ops = [Infix "Appl" (LAssoc 10) bindAppl]
-pre = [Prefix "Abst" (RAssoc 20) bindAbst]
+ops = [
+    Infix "Appl" (LAssoc 10) bindAppl,
+    Infix "Bind" (LAssoc 20) bindType,
+    Infix "Arrow" (RAssoc 30) bindArrow]
+
+pre = [
+    Prefix "Abst" (RAssoc 20) bindAbst]
+
+bindType :: LedParser Expr 
+bindType (Infix _ precedence _) lhs pex = do 
+    whtspc
+    rhs <- pex precedence
+    pure $ Type lhs rhs
 
 bindAppl :: LedParser Expr
 bindAppl (Infix _ precedence _) lhs pex = do 
@@ -41,9 +61,14 @@ bindAbst (Prefix _ precedence _) pex = do
     body <- pex (RAssoc 0)
     pure $ Abst bind body 
 
+bindArrow :: LedParser Expr
+bindArrow (Infix _ precedence _) lhs pex = do 
+    rhs <- pex precedence
+    pure $ Arrow lhs rhs
+
 lambda = buildParser ops pre nud oper pass
 
 term :: String -> Expr 
-term inp = case run (lambda <* eof) inp of 
-    Left _ -> error $ "invalid lmabda term "++inp
-    Right (l, _) -> l
+term inp = case run (whtspc *> lambda <* whtspc) inp of 
+    Err _ -> error $ "invalid lambda term "++inp
+    Pass l _ -> l
