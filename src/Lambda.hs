@@ -22,15 +22,14 @@ var :: Parser Expr
 var = Term <$> (some alpha)
 
 nud :: NudParser Expr 
-nud pex = var <|> wrap "(" (pex (RAssoc 0)) ")"
+nud pex = var <|> wrap "(" (strip $ pex (RAssoc 0)) ")"
 
 oper :: Parser String 
 oper = 
-    (whtspc >> (
-        ((char '\\' <|> char 'λ') >> pure "Abst")    <|>
-        (char ':'    >> pure "Bind")    <|>
-        (string "->" >> pure "Arrow"))) <|> 
-        ((consumed whtspc) <|> (lift $ list $ sat (/=')')) >> pure "Appl")
+    ((char '\\'   >> pure "Abst")   <|>
+     (char ':'    >> pure "Bind")   <|>
+     (string "->" >> pure "Arrow")) <|> 
+     ((whtspc >> (lift $ noneof ")")) >> pure "Appl")
 
 ops = [
     Infix "Appl" (LAssoc 10) bindAppl,
@@ -42,8 +41,7 @@ pre = [
 
 bindType :: LedParser Expr 
 bindType (Infix _ precedence _) lhs pex = do 
-    whtspc
-    rhs <- pex precedence
+    rhs <- strip $ pex precedence
     pure $ Type lhs rhs
 
 bindAppl :: LedParser Expr
@@ -53,12 +51,9 @@ bindAppl (Infix _ precedence _) lhs pex = do
 
 bindAbst :: PrefixParser Expr 
 bindAbst (Prefix _ precedence _) pex = do
-    whtspc
-    bind <- pex precedence
-    whtspc
+    bind <- strip $ pex precedence
     char '.'
-    whtspc
-    body <- pex (RAssoc 0)
+    body <- strip $ pex (RAssoc 0)
     pure $ Abst bind body 
 
 bindArrow :: LedParser Expr
@@ -69,6 +64,6 @@ bindArrow (Infix _ precedence _) lhs pex = do
 lambda = buildParser ops pre nud oper pass
 
 term :: String -> Expr 
-term inp = case run (whtspc *> lambda <* whtspc) inp of 
+term inp = case run (strip lambda <* eof) inp of 
     Err _ -> error $ "invalid lambda term "++inp
     Pass l _ -> l

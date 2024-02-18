@@ -122,6 +122,9 @@ eof = Parser $ \inp@(_, state) -> case parse item inp of
   Err _ -> Pass () inp
   Pass _ _ -> Err [(Expect "end of input", state)]
 
+notEof :: Parser Char
+notEof = lift item 
+
 alpha :: Parser Char
 alpha = expect (sat $ \x -> isAlpha x) "alpha"
 
@@ -146,8 +149,8 @@ between lhs p rhs = lhs *> p <* rhs
 wrap :: String -> Parser a -> String -> Parser a
 wrap lhs p rhs = between (string lhs) p (string rhs)
 
-token :: Parser a -> Parser a
-token p = between whtspc p whtspc
+strip :: Parser a -> Parser a
+strip p = whtspc *> p <* whtspc
 
 digit :: Parser Int
 digit = read . (:[]) <$> numeric
