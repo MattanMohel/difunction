@@ -1,3 +1,4 @@
+{-# LANGUAGE RankNTypes #-}
 {-# LANGUAGE TypeSynonymInstances #-}
 
 module Parser where
@@ -5,19 +6,27 @@ module Parser where
 import Control.Applicative
 import Data.Char
 
-type State = (Int, Int, Int)
-type Inp   = (String, State)
+type State s = ((Int, Int, Int), s)
+type Inp s = (String, State s)
 
-data Out a 
-  = Err  [(ParseErr, State)] 
-  | Pass a Inp
+data Out s a 
+  = Err  [(ParseErr, State s)] 
+  | Pass a (Inp s)
 
-index :: Inp -> Int 
-index (_, (_, _, i)) = i
+index :: Inp s -> Int 
+index (_, ((_, _, e), _)) = e
 
-instance Show a => Show (Out a) where 
+state :: Inp s -> s 
+state (_, (_, e)) = e
+
+advance :: Char -> State s -> State s
+advance x ((row, col, idx), state) = case x of
+  '\n' -> ((row + 1, col, idx + 1), state)
+  _    -> ((row, col + 1, idx + 1), state)
+
+instance (Show s, Show a) => Show (Out s a) where 
   show (Err err)     = show err
-  show (Pass out _)  = show out
+  show (Pass out s)  = "["++(show out)++", "++(show (state s))++"]"
 
 instance Show ParseErr where 
   show (Expect mes) = "expected \""++mes++"\""
@@ -31,135 +40,134 @@ data ParseErr
   | EndOfInput
   | Empty
 
-newtype Parser a = Parser (Inp -> Out a)
+newtype Parser s a = Parser (Inp s -> Out s a)
 
-instance Functor Parser where
+instance Functor (Parser s) where
   fmap fun p = Parser $ \inp -> case parse p inp of
     Pass out inp -> Pass (fun out) inp
     Err err -> Err err
 
-instance Applicative Parser where
+instance Applicative (Parser s) where
   pure a = Parser $ \inp -> (Pass a inp)
   pfun <*> p = Parser $ \inp -> case parse pfun inp of
     Pass fun inp -> parse (fmap fun p) inp
     Err err -> Err err
 
-instance Monad Parser where
+instance Monad (Parser s) where
   p >>= fun = Parser $ \inp -> case parse p inp of
     Pass out inp -> parse (fun out) inp
     Err err -> Err err
 
-instance Alternative Parser where
-  empty = Parser $ \_ -> Err [(Empty, (0, 0, 0))]
+instance Monoid s => Alternative (Parser s) where
+  empty = Parser $ \_ -> Err [(Empty, ((0, 0, 0), mempty))]
   p <|> q = Parser $ \inp -> case parse p inp of
     Pass out inp -> Pass out inp
     Err errp -> case parse q inp of
       Pass out inp -> Pass out inp
       Err errq -> Err $ errp ++ errq
 
-advance :: Char -> State -> State
-advance x (row, col, idx) = case x of
-  '\n' -> (row + 1, col, idx + 1)
-  _    -> (row, col + 1, idx + 1)
-
-parse :: Parser a -> Inp -> Out a
+parse :: Parser s a -> Inp s -> Out s a
 parse (Parser p) = p
 
-run :: Parser a -> String -> Out a
-run (Parser parser) stream = parser (stream, (0, 0, 0))
+run :: Monoid s => Parser s a -> String -> Out s a
+run (Parser parser) stream = parser (stream, ((0, 0, 0), mempty))
 
-err :: Parser a -> String -> Parser a
-err p mes = Parser $ \inp@(_, state) -> case parse p inp of
+entry :: Parser () a -> String -> Out () a 
+entry p = run p
+
+item :: Parser s Char
+item = Parser $ \(stream, state) -> case stream of
+  (x:xs) -> Pass x (xs, advance x state)
+  "" -> Err [(EndOfInput, state)]
+
+expect :: Parser s a -> String -> Parser s a
+expect p mes = Parser $ \inp@(_, state) -> case parse p inp of
   Pass out inp -> Pass out inp
-  Err _ -> Err [(Custom mes, state)]
+  Err _ -> Err [(Expect mes, state)]
 
-pass :: Monoid a => Parser a
-pass = Parser $ \inp -> Pass mempty inp
+-- consumes no input on success
+try :: Parser s a -> Parser s (Maybe a)
+try p = Parser $ \inp -> case parse p inp of
+  Err _ -> Pass Nothing inp
+  Pass out inp -> Pass (Just out) inp
 
 -- run parser without consuming input
-lift :: Parser a -> Parser a
+lift :: Parser s a -> Parser s a
 lift p = Parser $ \inp -> case parse p inp of 
   Pass out _ -> Pass out inp
   Err err -> Err err
 
-halt :: Parser a
-halt = Parser $ \(_, state) -> Err [(Empty, state)]
-
-consumed :: Parser a -> Parser a
+consumed :: Parser s a -> Parser s a
 consumed p = Parser $ \inp@(_, state) -> case parse p inp of 
   pass@(Pass _ inp') -> if (index inp') == (index inp)
     then Err [(Custom "didn't consume", state)]  
     else pass
   Err err -> Err err
 
-expect :: Parser a -> String -> Parser a
-expect p mes = Parser $ \inp@(_, state) -> case parse p inp of
-  Pass out inp -> Pass out inp
-  Err _ -> Err [(Expect mes, state)]
+pass :: Monoid a => Parser s a
+pass = Parser $ \inp -> Pass mempty inp
 
-item :: Parser Char
-item = Parser $ \(stream, state) -> case stream of
-  (x:xs) -> Pass x (xs, advance x state)
-  [] -> Err [(EndOfInput, state)]
+halt :: Parser s a
+halt = Parser $ \(_, state) -> Err [(Empty, state)]
 
-sat :: (Char -> Bool) -> Parser Char
-sat fun = item >>= \x -> if fun x then pure x else empty
+err :: String -> Parser s a
+err mes = Parser $ \(_, state) -> Err [(Custom mes, state)]
 
-char :: Char -> Parser Char
+sat :: (Char -> Bool) -> Parser s Char
+sat fun = item >>= \x -> if fun x then pure x else halt 
+
+char :: Char -> Parser s Char
 char c = expect (sat (==c)) [c]
 
-range :: Char -> Char -> Parser Char
+range :: Char -> Char -> Parser s Char
 range a b = expect (sat $ \x -> x >= a && x <= b) (a:'-':b:"")
 
-list :: Parser a -> Parser [a]
+list :: Parser s a -> Parser s [a]
 list p = (:[]) <$> p
 
-string :: String -> Parser String
+string :: String -> Parser s String
 string = foldr (\x -> (<*>) ((:) <$> char x)) (pure [])
 
-eof :: Parser ()
+eof :: Parser s ()
 eof = Parser $ \inp@(_, state) -> case parse item inp of
   Err _ -> Pass () inp
   Pass _ _ -> Err [(Expect "end of input", state)]
 
-notEof :: Parser Char
+notEof :: Parser s Char
 notEof = lift item 
 
-alpha :: Parser Char
+alpha :: Parser s Char
 alpha = expect (sat $ \x -> isAlpha x) "alpha"
 
-numeric :: Parser Char
+numeric :: Parser s Char
 numeric = expect (sat $ \x -> isDigit x) "numeric"
 
-alphanum :: Parser Char
+alphanum :: Parser s Char
 alphanum = expect (sat $ \x -> isAlpha x || isDigit x) "alphanum"
 
-anyof :: String -> Parser Char
+anyof :: String -> Parser s Char
 anyof s = expect (sat $ \x -> x `elem` s) ("any of "++s)
 
-noneof :: String -> Parser Char
+noneof :: String -> Parser s Char
 noneof s = expect (sat $ \x -> x `notElem` s) ("noneof of "++s)
 
-whtspc :: Parser String
+whtspc :: Monoid s => Parser s String
 whtspc = expect (many $ anyof "\n\t ") "whitespace"
 
-between :: Parser a -> Parser b -> Parser c -> Parser b
+between :: Parser s a -> Parser s b -> Parser s c -> Parser s b
 between lhs p rhs = lhs *> p <* rhs
 
-wrap :: String -> Parser a -> String -> Parser a
+wrap :: String -> Parser s a -> String -> Parser s a
 wrap lhs p rhs = between (string lhs) p (string rhs)
 
-strip :: Parser a -> Parser a
+strip :: Monoid s => Parser s a -> Parser s a
 strip p = whtspc *> p <* whtspc
 
-digit :: Parser Int
+digit :: Parser s Int
 digit = read . (:[]) <$> numeric
 
-number :: Parser Int
+number :: Monoid s => Parser s Int
 number = read <$> some numeric
 
--- consumes no input on success
-try :: Parser a -> Parser (Maybe a)
-try p = Parser $ \inp -> case parse p inp of
-  Err _ -> Pass Nothing inp
-  Pass out inp -> Pass (Just out) inp
+context :: (s -> a -> s) -> a -> Parser s a
+context fun x = Parser $ \(stream, (pos, state)) -> Pass x (stream, (pos, fun state x))
