@@ -1,28 +1,27 @@
 {-# LANGUAGE RankNTypes #-}
-{-# LANGUAGE TypeSynonymInstances #-}
 
 module Parser where
 
 import Control.Applicative
-import Data.Char
+import Data.Char  
 
-type State s = ((Int, Int, Int), s)
-type Inp s = (String, State s)
+type Pos = (Int, Int, Int)
+type Inp s = (String, Pos, s)
 
 data Out s a 
-  = Err  [(ParseErr, State s)] 
+  = Err  [(ParseErr, Pos)] 
   | Pass a (Inp s)
 
-index :: Inp s -> Int 
-index (_, ((_, _, e), _)) = e
+index :: Pos -> Int 
+index (_, _, e) = e
 
 state :: Inp s -> s 
-state (_, (_, e)) = e
+state (_, _, e) = e
 
-advance :: Char -> State s -> State s
-advance x ((row, col, idx), state) = case x of
-  '\n' -> ((row + 1, col, idx + 1), state)
-  _    -> ((row, col + 1, idx + 1), state)
+advance :: Char -> Pos -> Pos
+advance x (row, col, idx) = case x of
+  '\n' -> (row + 1, col, idx + 1)
+  _    -> (row, col + 1, idx + 1)
 
 instance (Show s, Show a) => Show (Out s a) where 
   show (Err err)     = show err
@@ -58,8 +57,8 @@ instance Monad (Parser s) where
     Pass out inp -> parse (fun out) inp
     Err err -> Err err
 
-instance Monoid s => Alternative (Parser s) where
-  empty = Parser $ \_ -> Err [(Empty, ((0, 0, 0), mempty))]
+instance Alternative (Parser s) where
+  empty = Parser $ \_ -> Err [(Empty, (0, 0, 0))]
   p <|> q = Parser $ \inp -> case parse p inp of
     Pass out inp -> Pass out inp
     Err errp -> case parse q inp of
@@ -70,20 +69,20 @@ parse :: Parser s a -> Inp s -> Out s a
 parse (Parser p) = p
 
 run :: Monoid s => Parser s a -> String -> Out s a
-run (Parser parser) stream = parser (stream, ((0, 0, 0), mempty))
+run (Parser parser) stream = parser (stream, (0, 0, 0), mempty)
 
 entry :: Parser () a -> String -> Out () a 
 entry p = run p
 
 item :: Parser s Char
-item = Parser $ \(stream, state) -> case stream of
-  (x:xs) -> Pass x (xs, advance x state)
-  "" -> Err [(EndOfInput, state)]
+item = Parser $ \(stream, pos, state) -> case stream of
+  (x:xs) -> Pass x (xs, advance x pos, state)
+  "" -> Err [(EndOfInput, pos)]
 
 expect :: Parser s a -> String -> Parser s a
-expect p mes = Parser $ \inp@(_, state) -> case parse p inp of
+expect p mes = Parser $ \inp@(_, pos, _) -> case parse p inp of
   Pass out inp -> Pass out inp
-  Err _ -> Err [(Expect mes, state)]
+  Err _ -> Err [(Expect mes, pos)]
 
 -- consumes no input on success
 try :: Parser s a -> Parser s (Maybe a)
@@ -98,9 +97,9 @@ lift p = Parser $ \inp -> case parse p inp of
   Err err -> Err err
 
 consumed :: Parser s a -> Parser s a
-consumed p = Parser $ \inp@(_, state) -> case parse p inp of 
-  pass@(Pass _ inp') -> if (index inp') == (index inp)
-    then Err [(Custom "didn't consume", state)]  
+consumed p = Parser $ \inp@(_, pos, _) -> case parse p inp of 
+  pass@(Pass _ (_, pos', _)) -> if (index pos') == (index pos)
+    then Err [(Custom "didn't consume", pos)]  
     else pass
   Err err -> Err err
 
@@ -108,10 +107,10 @@ pass :: Monoid a => Parser s a
 pass = Parser $ \inp -> Pass mempty inp
 
 halt :: Parser s a
-halt = Parser $ \(_, state) -> Err [(Empty, state)]
+halt = Parser $ \(_, pos, _) -> Err [(Empty, pos)]
 
 err :: String -> Parser s a
-err mes = Parser $ \(_, state) -> Err [(Custom mes, state)]
+err mes = Parser $ \(_, pos, _) -> Err [(Custom mes, pos)]
 
 sat :: (Char -> Bool) -> Parser s Char
 sat fun = item >>= \x -> if fun x then pure x else halt 
@@ -129,9 +128,9 @@ string :: String -> Parser s String
 string = foldr (\x -> (<*>) ((:) <$> char x)) (pure [])
 
 eof :: Parser s ()
-eof = Parser $ \inp@(_, state) -> case parse item inp of
+eof = Parser $ \inp@(_, pos, _) -> case parse item inp of
   Err _ -> Pass () inp
-  Pass _ _ -> Err [(Expect "end of input", state)]
+  Pass _ _ -> Err [(Expect "end of input", pos)]
 
 notEof :: Parser s Char
 notEof = lift item 
@@ -151,7 +150,7 @@ anyof s = expect (sat $ \x -> x `elem` s) ("any of "++s)
 noneof :: String -> Parser s Char
 noneof s = expect (sat $ \x -> x `notElem` s) ("noneof of "++s)
 
-whtspc :: Monoid s => Parser s String
+whtspc :: Parser s String
 whtspc = expect (many $ anyof "\n\t ") "whitespace"
 
 between :: Parser s a -> Parser s b -> Parser s c -> Parser s b
@@ -160,14 +159,18 @@ between lhs p rhs = lhs *> p <* rhs
 wrap :: String -> Parser s a -> String -> Parser s a
 wrap lhs p rhs = between (string lhs) p (string rhs)
 
-strip :: Monoid s => Parser s a -> Parser s a
+strip :: Parser s a -> Parser s a
 strip p = whtspc *> p <* whtspc
 
 digit :: Parser s Int
 digit = read . (:[]) <$> numeric
 
-number :: Monoid s => Parser s Int
+number :: Parser s Int
 number = read <$> some numeric
 
-context :: (s -> a -> s) -> a -> Parser s a
-context fun x = Parser $ \(stream, (pos, state)) -> Pass x (stream, (pos, fun state x))
+-- TODO: add where clause to remove duplicate
+(|=) :: (s -> s) -> Parser s s
+(|=) fun = Parser $ \(stream, pos, state) -> Pass (fun state) (stream, pos, fun state)
+
+(|-) :: Parser s s
+(|-) = (|=) id 

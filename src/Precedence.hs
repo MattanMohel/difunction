@@ -19,7 +19,6 @@ type PrefixParser s e = Prefix s e -> NudParser s e
 
 buildParser ::
   forall s e .
-     Monoid s => 
      [Infix s e]
   -> [Prefix s e]
   -> NudParser s e
